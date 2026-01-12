@@ -1,0 +1,18 @@
+[package]
+name = "wifi"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+name = "wifi"
+
+[build-dependencies]
+bindgen = "0.72.1"
+
+[dependencies]
+anyhow = "1.0.100"
+futures-util = "0.3.31"
+glib = "0.21.5"
+rand = "0.9.2"
+zbus = "5.12.0"
