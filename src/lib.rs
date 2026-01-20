@@ -266,7 +266,7 @@ fn wifi_mode_get_display_value(
     {
         *state |= 4 | 8; // Active | Markup
         let anim_frame =
-            &pd.anim_connecting.frames[pd.anim_connecting.index % pd.anim_connecting.frames.len()]; // index will be updated in async task froms handle_state       
+            &pd.anim_connecting.frames[pd.anim_connecting.index % pd.anim_connecting.frames.len()]; // index will be updated in async task froms handle_state
         Some(anim_frame.to_string_lossy().to_string())
     } else if let Some(ref b) = pd.active_connection
         && *b == ap.bssid
@@ -282,9 +282,12 @@ fn wifi_mode_get_display_value(
             // TODO!: add customization
             "{icon}  {ssid} <span size='small' foreground='#639ec5ff' alpha='80%'>{text}</span>",
             // "{icon}  {ssid} {text}",
-            ssid = ap.ssid
+            ssid = if ap.ssid.is_empty() { "[hidden]" } else { &ap.ssid }
         )),
-        None => Some(format!("{icon}  {ssid}", ssid = ap.ssid)),
+        None => Some(format!(
+            "{icon}  {ssid}", 
+            ssid = if ap.ssid.is_empty() { "[hidden]" } else { &ap.ssid }
+        )),
     }
 }
 
