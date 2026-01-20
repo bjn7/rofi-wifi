@@ -272,7 +272,7 @@ fn wifi_mode_get_display_value(
         && *b == ap.bssid
     {
         *state |= 4 | 8; // Active | Markup
-        Some("(contected)".into())
+        Some("(connected)".into())
     } else {
         None
     };
