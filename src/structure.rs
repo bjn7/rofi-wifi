@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use zbus::zvariant::OwnedObjectPath;
 
+use crate::dbus::WirelessDeviceProxy;
+
 pub type BSSID = String;
 
 #[derive(PartialEq, Debug)]
@@ -86,6 +88,8 @@ pub enum AppState {
     },
 }
 
+impl AppState {}
+
 #[derive(Debug, Clone)]
 // List of available aps
 pub struct AccessPoint {
@@ -117,16 +121,6 @@ pub struct IndicatorAnim {
     pub index: usize,
     ///
     pub fps: u8,
-}
-
-#[derive(Debug)]
-// This stores blocking and must be converted into an async function.
-// Converting to async is cheap since both are just thin wrappers around the same connection.
-pub struct NetworkManagerDbusProxy {
-    pub con: zbus::Connection, //clone of con is cheap
-    pub wifi_proxy: zbus::Proxy<'static>,
-    pub property_proxy: zbus::fdo::PropertiesProxy<'static>,
-    pub dev_path: zbus::zvariant::OwnedObjectPath,
 }
 
 #[derive(Debug)]
@@ -166,7 +160,10 @@ impl Default for WiFiIcon {
 // Basically, The entire state of the application
 
 #[derive(Debug)]
-pub struct PrivateData {
+pub struct PrivateData<'a> {
+    pub background_tasks: Vec<glib::JoinHandle<()>>,
+    pub periodic_scan_source_id: Option<glib::SourceId>,
+
     pub anim_scan: IndicatorAnim,
     pub anim_connecting: IndicatorAnim,
     pub aps: Vec<AccessPoint>,
@@ -176,18 +173,17 @@ pub struct PrivateData {
     pub state: AppState,
     pub icons: WiFiIcon,
     pub active_connection: Option<BSSID>,
-    pub nm_dbus: NetworkManagerDbusProxy,
+    pub wireless: WirelessDeviceProxy<'a>,
     pub display_name: std::ffi::CString,
     pub hidden_ssid: Option<String>,
     _execution_signal: ExecutionSignals,
 }
 
-impl PrivateData {
-    pub fn new(
-        network_manager_proxy: NetworkManagerDbusProxy,
-        cached_aps: Vec<AccessPoint>,
-    ) -> Self {
+impl<'a> PrivateData<'a> {
+    pub fn new(wireless: WirelessDeviceProxy<'a>, cached_aps: Vec<AccessPoint>) -> Self {
         Self {
+            background_tasks: Vec::new(),
+            periodic_scan_source_id: None,
             anim_scan: IndicatorAnim {
                 frames: vec![
                     IndicatorAnim::build_scan("wifi", "⠻"),
@@ -210,7 +206,7 @@ impl PrivateData {
                 fps: 4,
             },
             aps: cached_aps,
-            nm_dbus: network_manager_proxy,
+            wireless: wireless,
             active_connection: None,
             hidden_ssid: None,
             _execution_signal: ExecutionSignals {
@@ -222,6 +218,14 @@ impl PrivateData {
             leaked_display_values: Vec::new(),
             state: AppState::Idle,
         }
+    }
+
+    pub fn spawn_local<F>(&mut self, fut: F)
+    where
+        F: std::future::Future<Output = ()> + 'static,
+    {
+        let handle = glib::MainContext::default().spawn_local(fut);
+        self.background_tasks.push(handle);
     }
 
     async fn shut(field: &mut FnSIG, fps: u8) {
@@ -260,7 +264,7 @@ impl PrivateData {
         }
     }
 
-    pub fn pool_shut_signal(&mut self, task: VFBTask) -> bool {
+    pub fn poll_shut_signal(&mut self, task: VFBTask) -> bool {
         match task {
             VFBTask::Connect => VFBTask::Connect.poll_signal(&mut self._execution_signal),
             VFBTask::Scan => VFBTask::Scan.poll_signal(&mut self._execution_signal),

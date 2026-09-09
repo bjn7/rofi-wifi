@@ -2,6 +2,7 @@
 
 A WiFi network manager plugin for Rofi.
 
+
 ## Installation
 
 #### Via AUR Package (using yay helper):

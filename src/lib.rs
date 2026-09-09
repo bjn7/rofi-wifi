@@ -1,14 +1,32 @@
+/**
+*
+* The current commit is filled with errors.
+* I was trying to transition from this prototype-style code into something more readable and maintainable, making it easier to add new features.
+*
+* Currently, the code is too prototyped, with random spawning and signals that are hard to keep track of.
+* That was good for playing around with, but it is kind of bad for the long term.
+*
+* To modify or add new features, the code needs to be thoroughly studied, because any random function can randomly spawn a task.
+
+* Currently, I was trying to create a proper code flow so that things wouldn't randomly happen out of nowhere in some random async background task.
+* But it was tedious, and now the code is in this half-modified state.
+*
+* I am pushing it into git in this half modified state in case it gets deleted from my local storage and, someday, I open this repo again, see this, and want to fix it.
+*
+*/
+
 mod ffi;
 mod rofi;
 mod structure;
 mod utils;
 use std::{cell::RefCell, rc::Rc, time::Duration};
 use structure::*;
+mod dbus;
 
 // mod utils;
 use ffi::Mode;
 use glib::MainContext;
-mod network_manager;
+mod netwrok_manager;
 mod state;
 
 use crate::{
@@ -16,57 +34,37 @@ use crate::{
     state::handle_state,
 };
 
-//  I was just creating a simple prototype and playing around with Rofi without involving much async,
-// but somehow it turned into an actual useable plugin with all these background tasks and async.
-
-// I initially planned to just use nmcli to connect and disconnect, but ended up using dbus to directly communicate with NetworkManager.
-
-// Todo!(): Add custom prompt.
-// Todo!(): Modiy the wifi-icon icon color, including states color.
-
 fn wifi_mode_init(sw: &'static mut Mode) -> i32 {
     if rofi::get_private_state::<PrivateData>(&sw).is_some() {
         return 1;
     }
 
     let Some(interface) = rofi::find_arg_str("-iface") else {
-        eprintln!("Interface is required");
+        eprintln!("Interface is required. Use -iface <interface_name>");
         return 0;
     };
 
     let glib_context = MainContext::default();
     let async_block_result = glib_context.block_on(async {
-        let network_manager_proxy = network_manager::setup_dbus(&interface).await?;
+        let wireless_device = netwrok_manager::resolve_wireless_device(&interface).await?;
 
-        let cached_aps = network_manager::fetch_aps(
-            &network_manager_proxy.con,
-            &network_manager_proxy.wifi_proxy,
-        )
-        .await?;
+        let aps = netwrok_manager::fetch_aps(&wireless_device).await?;
+        let active_ap_bssid_opt = netwrok_manager::get_active_ap(&wireless_device).await?;
 
-        let active_ap_bssid_opt = network_manager::get_active_ap(
-            &network_manager_proxy.con,
-            &network_manager_proxy.wifi_proxy,
-        )
-        .await?;
-
-        anyhow::Ok((network_manager_proxy, cached_aps, active_ap_bssid_opt))
+        anyhow::Ok((wireless_device, aps, active_ap_bssid_opt))
     });
 
-    let Ok((network_manager_proxy, cached_aps, active_ap_bssid_opt)) = async_block_result else {
+    let Ok((network_manager_proxy, aps, active_ap_bssid_opt)) = async_block_result else {
         eprintln!("Failed to create a dbus proxy");
         return 0;
     };
 
-    let mut pd = PrivateData::new(network_manager_proxy, cached_aps);
+    let mut pd = PrivateData::new(network_manager_proxy, aps);
     pd.set_connected(active_ap_bssid_opt);
     pd.sort_accesspoints();
 
     // If the 'wifi' widget is found, load the theme properties
     if let Some(theme_widget) = rofi::config_find_widget("wifi") {
-        // Load scan's config
-
-        // Load scan's configuration properties
         if let Some(fps) = rofi::theme_find_property_int(theme_widget, "state-scan-fps")
             .filter(|&fps| fps > 0 && fps <= 60)
         {
@@ -82,11 +80,10 @@ fn wifi_mode_init(sw: &'static mut Mode) -> i32 {
                 .collect();
         }
 
-        // Load connecting's configuration properties
         if let Some(fps) = rofi::theme_find_property_int(theme_widget, "sate-connecting-fps")
             .filter(|&fps| fps > 0 && fps <= 60)
         {
-            pd.anim_scan.fps = fps as u8;
+            pd.anim_connecting.fps = fps as u8;
         }
 
         if let Some(state_scan_indicator) =
@@ -120,10 +117,8 @@ fn wifi_mode_init(sw: &'static mut Mode) -> i32 {
 
     let boxed_pd = Box::new(pd);
 
-    // Avoding smart pointer for this portotype
     // Leaking the memory so it can be used across multiple functions without rust freeing it.
     // This is because `pd` requires manual memory management.
-    // let raw_ptr = Box::into_raw(boxed_pd);
     let leaked_pd: &'static mut PrivateData = Box::leak(boxed_pd);
 
     // For now, let's avoid smart pointer for private data, and store it directly.
@@ -139,7 +134,7 @@ fn wifi_mode_init(sw: &'static mut Mode) -> i32 {
             let mut sw = sw_connect_detection_task.borrow_mut();
             rofi::get_private_state_mut(&mut sw).expect("Failed to get private data.")
         };
-        let _ = network_manager::connection_background_task(pd).await;
+        let _ = netwrok_manager::connection_background_task(pd).await;
         ()
     });
 
@@ -178,10 +173,7 @@ fn wifi_mode_init(sw: &'static mut Mode) -> i32 {
             pd.allow_execute(VFBTask::Scan);
             state::set_wifi_mode_scan(Rc::clone(&sw), &mut pd);
 
-            if let Err(e) =
-                network_manager::trigger_rescan(&pd.nm_dbus.property_proxy, &pd.nm_dbus.wifi_proxy)
-                    .await
-            {
+            if let Err(e) = netwrok_manager::trigger_rescan(&pd.wireless).await {
                 eprintln!("Failed to scan ap: {}", e);
             }
 
@@ -196,9 +188,7 @@ fn wifi_mode_init(sw: &'static mut Mode) -> i32 {
             }
             pd.shut_scan().await; //wait for gracefull shutdown of the function
 
-            if let Ok(scanned_aps) =
-                network_manager::fetch_aps(&pd.nm_dbus.con, &pd.nm_dbus.wifi_proxy).await
-            {
+            if let Ok(scanned_aps) = netwrok_manager::fetch_aps(&pd.wireless).await {
                 // pd.aps.append(&mut scanned_aps);
                 pd.aps = scanned_aps;
                 pd.sort_accesspoints();
@@ -282,11 +272,19 @@ fn wifi_mode_get_display_value(
             // TODO!: add customization
             "{icon}  {ssid} <span size='small' foreground='#639ec5ff' alpha='80%'>{text}</span>",
             // "{icon}  {ssid} {text}",
-            ssid = if ap.ssid.is_empty() { "[hidden]" } else { &ap.ssid }
+            ssid = if ap.ssid.is_empty() {
+                "[hidden]"
+            } else {
+                &ap.ssid
+            }
         )),
         None => Some(format!(
-            "{icon}  {ssid}", 
-            ssid = if ap.ssid.is_empty() { "[hidden]" } else { &ap.ssid }
+            "{icon}  {ssid}",
+            ssid = if ap.ssid.is_empty() {
+                "[hidden]"
+            } else {
+                &ap.ssid
+            }
         )),
     }
 }
@@ -335,8 +333,10 @@ fn wifi_mode_result(
                 && ap.setting_path.is_some()
             {
                 // cloning of connection is cheap
-                let _ =
-                    network_manager::forget_ssid_blocking(&pd.nm_dbus.con.clone().into(), &ap.ssid);
+                let _ = netwrok_manager::forget_ssid_blocking(
+                    &pd.wireless.conn.clone().into(),
+                    &ap.ssid,
+                );
                 pd.aps[selected_line].setting_path = None;
             }
             ModeMode_RELOAD_DIALOG

@@ -1,4 +1,4 @@
-use crate::network_manager;
+use crate::netwrok_manager;
 
 use super::PrivateData;
 use super::ffi;
@@ -114,7 +114,7 @@ pub fn set_wifi_mode_scan(
             return glib::ControlFlow::Break;
         };
 
-        if pd.pool_shut_signal(VFBTask::Scan) {
+        if pd.poll_shut_signal(VFBTask::Scan) {
             return glib::ControlFlow::Break;
         }
 
@@ -180,7 +180,7 @@ pub fn set_mode_connecting_and_handle(
             return glib::ControlFlow::Break;
         };
 
-        if pd.pool_shut_signal(VFBTask::Connect) {
+        if pd.poll_shut_signal(VFBTask::Connect) {
             return glib::ControlFlow::Break;
         }
         pd.anim_connecting.index += 1;
@@ -202,27 +202,27 @@ pub fn set_mode_connecting_and_handle(
 
         let wifi_config;
         if access_point.setting_path.is_some() && reason == 0 {
-            wifi_config = network_manager::connect_pre_existing_access_point(
-                &pd.nm_dbus.con,
+            wifi_config = netwrok_manager::connect_pre_existing_access_point(
+                &pd.wireless.conn,
                 &access_point,
-                &pd.nm_dbus.dev_path,
+                &pd.wireless.device_path,
             )
             .await?;
         } else {
-            wifi_config = network_manager::create_and_connect_access_point(
-                &pd.nm_dbus.con,
+            wifi_config = netwrok_manager::create_and_connect_access_point(
+                &pd.wireless.conn,
                 &access_point,
-                &pd.nm_dbus.dev_path,
+                &pd.wireless.device_path,
                 own_password,
                 pd.hidden_ssid.take(),
             )
             .await?;
         }
-        let reason = network_manager::network_state(&pd.nm_dbus.con, &pd.nm_dbus.dev_path)
+        let reason = netwrok_manager::network_state(&pd.wireless.conn, &pd.wireless.device_path)
             .await
             .unwrap();
         if reason > 0 {
-            network_manager::forget_config(&pd.nm_dbus.con, &wifi_config).await?;
+            netwrok_manager::forget_config(&pd.wireless.conn, &wifi_config).await?;
             let index = pd
                 .aps
                 .iter()
